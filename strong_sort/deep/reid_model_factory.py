@@ -101,7 +101,8 @@ def show_downloadeable_models():
 
 
 def get_model_url(model):
-    model = str(model).rsplit('/', 1)[-1]
+    from pathlib import Path
+    model = Path(model).name
     if model in __trained_urls:
         return __trained_urls[model]
     else:
@@ -109,7 +110,8 @@ def get_model_url(model):
 
 
 def is_model_in_model_types(model):
-    model = str(model).rsplit('/', 1)[-1].split('.')[0]
+    from pathlib import Path
+    model = Path(model).name.split('.')[0]
     if model in __model_types:
         return True
     else:
@@ -117,7 +119,8 @@ def is_model_in_model_types(model):
 
 
 def get_model_name(model):
-    model = str(model).rsplit('/', 1)[-1].split('.')[0]
+    from pathlib import Path
+    model = Path(model).name.split('.')[0]
     for x in __model_types:
         if x in model:
             return x

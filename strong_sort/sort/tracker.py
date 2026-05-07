@@ -46,6 +46,7 @@ class Tracker:
 
         self.kf = kalman_filter.KalmanFilter()
         self.tracks = []
+        self.deleted_tracks = [] # Store deleted tracks for long-term ReID
         self._next_id = 1
 
     def predict(self):
@@ -84,9 +85,50 @@ class Tracker:
                 detections[detection_idx], classes[detection_idx], confidences[detection_idx])
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
+        # Save deleted tracks for long term ReID
+        deleted_tracks_this_frame = [t for t in self.tracks if t.is_deleted() and t.track_id in self.metric.samples]
+        self.deleted_tracks.extend(deleted_tracks_this_frame)
+        self.tracks = [t for t in self.tracks if not t.is_deleted()]
+
+        # Third matching step: Match unmatched detections against historically deleted tracks
+        if len(self.deleted_tracks) > 0 and len(unmatched_detections) > 0:
+            unmatched_det_features = np.array([detections[i].feature for i in unmatched_detections])
+            deleted_track_ids = np.array([t.track_id for t in self.deleted_tracks])
+
+            # compute distance between unmatched detections and deleted tracks
+            cost_matrix = self.metric.distance(unmatched_det_features, deleted_track_ids)
+            
+            # Using simple thresholding for assignment (greedy matching)
+            revived_detections = set()
+            revived_tracks = set()
+
+            for det_idx, det_feature in enumerate(unmatched_det_features):
+                if det_idx in revived_detections: continue
+                # Find best matching deleted track
+                min_cost_idx = np.argmin(cost_matrix[:, det_idx])
+                min_cost = cost_matrix[min_cost_idx, det_idx]
+
+                if min_cost <= self.metric.matching_threshold and min_cost_idx not in revived_tracks:
+                    # Revive this track
+                    historical_track = self.deleted_tracks[min_cost_idx]
+                    
+                    # Create new track with historical ID
+                    original_detection_idx = unmatched_detections[det_idx]
+                    self.tracks.append(Track(
+                        detections[original_detection_idx].to_xyah(), historical_track.track_id, classes[original_detection_idx].item(), confidences[original_detection_idx].item(), self.n_init, self.max_age, self.ema_alpha,
+                        detections[original_detection_idx].feature))
+                    
+                    revived_detections.add(det_idx)
+                    revived_tracks.add(min_cost_idx)
+            
+            # Update unmatched detections list to only include those that weren't revived
+            unmatched_detections = [d for i, d in enumerate(unmatched_detections) if i not in revived_detections]
+            
+            # Remove revived tracks from the deleted_tracks list
+            self.deleted_tracks = [t for i, t in enumerate(self.deleted_tracks) if i not in revived_tracks]
+
         for detection_idx in unmatched_detections:
             self._initiate_track(detections[detection_idx], classes[detection_idx].item(), confidences[detection_idx].item())
-        self.tracks = [t for t in self.tracks if not t.is_deleted()]
 
         # Update distance metric.
         active_targets = [t.track_id for t in self.tracks if t.is_confirmed()]
